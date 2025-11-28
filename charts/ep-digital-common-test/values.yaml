@@ -1,0 +1,184 @@
+# Default values for ${application-name}.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Default values with anchors
+appName: &appName ${application-name}-dev
+replicaCount: 1
+image:
+  repository: asia.gcr.io/${gcp-project-id}/${application-long-name}/${application-name}
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: 1.0.0
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: *appName
+secret:
+  # Specifies whether a secret should be created
+  create: true
+  # Annotations to add to the secret
+  annotations:
+    kubernetes.io/service-account.name: *appName
+  name: *appName
+role:
+  # Specifies whether a role should be created
+  create: true
+  # Annotations to add to the role
+  annotations: {}
+  name: *appName
+roleBinding:
+  # Specifies whether a role should be created
+  create: true
+  # Annotations to add to the role
+  annotations: {}
+  name: *appName
+clusterRoleBinding:
+  # Specifies whether a role should be created
+  create: true
+  # Annotations to add to the role
+  annotations: {}
+  name: *appName
+  namespace: *appName
+service:
+  name: *appName
+  type: ClusterIP
+  port: 8080
+deployment:
+  name: *appName
+containerPort: 8080
+## Datadog settings for tagging and monitoring
+datadog:
+  enabled: false
+  env: ""
+  service: ""
+  version: ""
+## Readiness and liveness probe initial delay and timeout
+## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+
+hostAliases: []
+# - ip: "100.65.20.xx"
+#   hostnames:
+#     - "xxx-dev.apps.xxx.com"
+livenessProbe:
+  enabled: false
+  httpGet:
+    path: "/health/liveness"
+    port: 80
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+  successThreshold: 1
+  timeoutSeconds: 5
+readinessProbe:
+  enabled: false
+  httpGet:
+    path: "/health/readiness"
+    port: 80
+  initialDelaySeconds: 30
+  periodSeconds: 5
+  failureThreshold: 1
+  successThreshold: 1
+  timeoutSeconds: 5
+podAnnotations: []
+command: []
+args: []
+ingress:
+  enabled: false
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    cert-manager.io/cluster-issuer: letsencrypt-issuer
+  hosts:
+    - host: ${application-long-name}-${application-name}.localhost.nip.io
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+          # tls:
+          #   - secretName: ${application-name}-tls
+          #     hosts:
+          #       - ${application-name}.localhost.nip.io
+istio:
+  gateway: "asm-fe-gateway/${application-name}-gateway"
+  host: "${application-short-name}-dev.apps.pttep.com"
+  allowOrigins: []
+  virtualService:
+    name: *appName
+    path: "/"
+resources: {}
+# We usually recommend not to specify default resources and to leave this as a conscious
+# choice for the user. This also increases chances charts run on environments with little
+# resources, such as Minikube. If you do want to specify resources, uncomment the following
+# lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+# limits:
+#   cpu: 100m
+#   memory: 128Mi
+# requests:
+#   cpu: 100m
+#   memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+nodeSelector: {}
+tolerations: []
+affinity: {}
+env: {}
+# NODE_ENV: production
+# PORT: 3000
+# PORT_LISTEN: 81
+
+extraConfigmapMounts: {}
+# - name: cacerts
+#   configMap: cacerts-configmap
+#   mountPath: /etc/pki/ca-trust/extracted/java/cacerts
+#   subPath: ca-bundle.jks
+#   readOnly: true
+
+extraSecretMounts: {}
+# - name: postgres
+#   secret: postgres
+#   mountPath: /app/postgres.conf
+#   subPath: postgres.conf
+#   readOnly: true
+# - name: application-secret
+#   secret: application
+#   mountPath: /app/application.conf
+#   subPath: application.conf
+#   readOnly: true
+
+extraMounts: {}
+# - name: my-secrets
+#   mount:
+#     emptyDir:
+#       medium: Memory
+#   mountPath: /var/run/my-secrets
+
+extEnv: {}
+# - name: TYPE_ORM_POSTGRES_HOST
+#   valueFrom:
+#     secretKeyRef:
+#       name: postgres
+#       key: TYPE_ORM_POSTGRES_HOST
+
+initContainers: []
+# Example initContainer definition:
+# initContainers:
+#   - name: database-permissions
+#     image: busybox
+#     command: ["sh", "-c"]
+#     args:
+#       - >
+#         chmod 0600 /app/configuration/client-key.pem &&
+#         chmod 0640 /app/configuration/server-ca.pem;
+#     volumeMounts:
+#       - name: database-certs
+#         mountPath: /app/configuration

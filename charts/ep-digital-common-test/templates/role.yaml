@@ -1,0 +1,19 @@
+{{- if .Values.role.create -}}
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Values.role.name }}
+  labels:
+    {{- include "ep-digital-common.labels" . | nindent 4 }}
+  {{- with .Values.role.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - "*"
+{{- end }}
