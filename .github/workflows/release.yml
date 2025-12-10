@@ -33,33 +33,48 @@ jobs:
       # ---------------------------------------------------------
       #  Bump Chart Version (patch)
       # ---------------------------------------------------------
-      - name: Bump Helm Chart Version (patch)
+      - name: Detect and bump changed Helm chart versions
         run: |
-          # Find Chart.yaml inside charts/
-          CHART_FILE=$(find charts -maxdepth 2 -name Chart.yaml | head -n 1)
+          # find all charts (one folder deep)
+          CHARTS=$(find charts -mindepth 1 -maxdepth 1 -type d)
 
-          if [ -z "$CHART_FILE" ]; then
-            echo "❌ Chart.yaml not found under ./charts/"
-            exit 1
+          BUMPED=""
+
+          for CHART in $CHARTS; do
+            CHART_FILE="$CHART/Chart.yaml"
+
+            # skip if Chart.yaml does not exist
+            [[ ! -f "$CHART_FILE" ]] && continue
+            
+            # detect whether this chart has changed in this commit
+            if ! git diff --name-only HEAD~1 HEAD | grep -q "^$CHART/"; then
+              echo "Chart unchanged: $CHART → skipping bump"
+              continue
+            fi
+
+            echo "Chart changed: $CHART → bumping"
+
+            CURRENT_VERSION=$(grep '^version:' "$CHART_FILE" | awk '{print $2}')
+
+            MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+            MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+            PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+
+            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+
+            sed -i "s/^version:.*/version: $NEW_VERSION/" "$CHART_FILE"
+
+            BUMPED="$BUMPED $(basename $CHART)→$NEW_VERSION"
+          done
+
+          if [[ -z "$BUMPED" ]]; then
+            echo "No charts changed. Skipping commit."
+            echo "SKIP_COMMIT=true" >> $GITHUB_ENV
+            exit 0
           fi
 
-          echo "Found chart at: $CHART_FILE"
-
-          # extract current version
-          CURRENT_VERSION=$(grep '^version:' "$CHART_FILE" | awk '{print $2}')
-          echo "Current version: $CURRENT_VERSION"
-
-          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
-
-          NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-
-          echo "Bumping to: $NEW_VERSION"
-          sed -i "s/^version:.*/version: $NEW_VERSION/" "$CHART_FILE"
-
-          # Export for next action
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "Charts bumped: $BUMPED"
+          echo "COMMIT_MESSAGE=ci: bump Helm chart(s): $BUMPED [skip ci]" >> $GITHUB_ENV
 
       - name: Commit & Push version bump
         uses: stefanzweifel/git-auto-commit-action@v5
