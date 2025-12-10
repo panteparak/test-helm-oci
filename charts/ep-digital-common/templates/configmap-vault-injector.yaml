@@ -1,0 +1,53 @@
+{{- if .Values.vaultInjector.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ep-digital-common.name" . }}-vault-agent-config
+data:
+  vault-agent-config.hcl: |
+    exit_after_auth = false
+    pid_file        = "/tmp/vault-agent.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role = "your-role"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/tmp/vault-token"
+        }
+      }
+    }
+
+    template {
+      destination = "/app/configuration/config.json"
+      perms       = 0644
+      contents    = >
+        {{`{{ with secret "secret/data/projects/${gcp-project-id}/${gcp-k8s-cluster}/${application-name}-dev/configuration" }}{{ .Data.data | toJSON }}{{ end }}`}}
+    }
+
+    template {
+      destination = "/app/configuration/server-ca.base64"
+      perms       = 0644
+      contents    = >
+        {{`{{ with secret "secret/data/projects/centralized-database/dev" }}{{ .Data.data.SSL_CA_CERT }}{{ end }}`}}
+    }
+
+    template {
+      destination = "/app/configuration/client-key.base64"
+      perms       = 0600
+      contents    = >
+        {{`{{ with secret "secret/data/projects/centralized-database/dev" }}{{ .Data.data.SSL_CLIENT_KEY }}{{ end }}`}}
+    }
+
+    template {
+      destination = "/app/configuration/client-cert.base64"
+      perms       = 0644
+      contents    = >
+        {{`{{ with secret "secret/data/projects/centralized-database/dev" }}{{ .Data.data.SSL_CLIENT_CERT }}{{ end }}`}}
+    }
+{{- end }}

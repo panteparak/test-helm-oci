@@ -1,0 +1,22 @@
+{{- if .Values.vaultInjector.enabled -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "ep-digital-common.fullname" . }}-role-binding
+  labels:
+    {{- include "ep-digital-common.labels" . | nindent 4 }}
+  {{- with .Values.clusterRoleBinding }}
+    {{- with .annotations }}
+  annotations:
+  {{ toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ep-digital-common.serviceAccountName" . }}
+    namespace: {{ include "ep-digital-common.serviceAccountNamespace" . }}
+{{- end }}

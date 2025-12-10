@@ -1,0 +1,21 @@
+application:
+  projectName: nginx-test
+  module: ""
+  functionGroup: ""
+  environment: ""
+
+replicaCount: 1
+image:
+  repository: nginx
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: alpine
+
+datadog:
+  enabled: false
+  env: ""
+  service: ""
+  version: ""
+
+vaultInjector:
+  enabled: false
