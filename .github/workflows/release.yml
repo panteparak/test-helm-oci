@@ -96,15 +96,30 @@ jobs:
         run: |
           CHART="charts/${{ matrix.chart }}/Chart.yaml"
 
-          # Extract clean version: remove quotes & trim whitespace
-          CURRENT=$(yq -r '.version' "$CHART" | tr -d '"' | xargs)
+          # Extract version cleanly (raw string)
+          RAW=$(yq -r '.version' "$CHART")
 
-          # Bump patch
-          NEW=$(echo "$CURRENT" | awk -F. '{ $NF = $NF + 1; OFS = "."; print }')
+          # Remove all non-semver characters (quotes, CRLF, tabs, UTF crap)
+          CURRENT=$(printf "%s" "$RAW" | tr -cd '0-9.' | sed 's/^\.*//; s/\.*$//')
+
+          echo "Clean parsed version: '$CURRENT'"
+
+          # Split semver safely in bash (no awk)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Ensure numeric values
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          # Increment patch
+          PATCH=$((PATCH + 1))
+
+          NEW="$MAJOR.$MINOR.$PATCH"
 
           echo "Bumping version $CURRENT → $NEW"
 
-          # Write clean version back
+          # Write back to Chart.yaml
           yq -i ".version = \"$NEW\"" "$CHART"
 
           echo "new_version=$NEW" >> $GITHUB_OUTPUT
