@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       charts:
-        description: "Comma-separated list of charts to release (e.g. api,frontend)"
+        description: "Comma-separated list of charts to force-release (e.g. api,frontend)"
         required: false
         default: ""
 
@@ -19,7 +19,7 @@ permissions:
   contents: write
 
 jobs:
-  detect-changes:
+  detect-charts:
     name: Determine Chart List
     runs-on: ubuntu-latest
 
@@ -27,50 +27,44 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # For manual dispatch → Use user input
-      - name: Use workflow_dispatch charts if provided
-        id: dispatch-input
+      - name: Check if manual input provided
+        id: mode
         run: |
-          if [ "${{ github.event.inputs.charts }}" != "" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             [ "${{ github.event.inputs.charts }}" != "" ]; then
             echo "mode=manual" >> $GITHUB_OUTPUT
             echo "charts=${{ github.event.inputs.charts }}" >> $GITHUB_OUTPUT
           else
             echo "mode=auto" >> $GITHUB_OUTPUT
-            echo "charts=" >> $GITHUB_OUTPUT
           fi
 
-      # Auto detect changed charts when not manually triggered
-      - name: Detect changed charts (auto)
-        id: auto-detect
-        if: steps.dispatch-input.outputs.mode == 'auto'
+      - name: Auto-detect changed charts
+        id: autodetect
+        if: steps.mode.outputs.mode == 'auto'
         run: |
           CHANGED=$(git diff --name-only HEAD~1 HEAD \
             | grep '^charts/' \
             | cut -d/ -f2 \
             | sort -u || true)
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
 
-          echo "auto=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Merge manual or auto charts into matrix array
+      - name: Build chart matrix list
         id: set-matrix
         run: |
           arr=()
 
-          if [ "${{ steps.dispatch-input.outputs.mode }}" = "manual" ]; then
-            echo "Using manual chart list..."
-            for c in $(echo "${{ steps.dispatch-input.outputs.charts }}" | tr ',' ' '); do
+          if [ "${{ steps.mode.outputs.mode }}" = "manual" ]; then
+            for c in $(echo "${{ steps.mode.outputs.charts }}" | tr ',' ' '); do
               if [ -d "charts/$c" ]; then
                 arr+=("\"$c\"")
               fi
             done
           else
-            echo "Using auto-detected charts..."
-            for c in ${{ steps.auto-detect.outputs.auto }}; do
+            for c in ${{ steps.autodetect.outputs.changed }}; do
               if [ -d "charts/$c" ]; then
                 arr+=("\"$c\"")
               fi
@@ -80,45 +74,40 @@ jobs:
           MATRIX="[$(IFS=,; echo "${arr[*]}")]"
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
-      - name: Print matrix
-        run: echo "${{ steps.set-matrix.outputs.matrix }}"
-
   publish:
     name: Publish Charts to GHCR
-    needs: detect-changes
-    if: needs.detect-changes.outputs.matrix != '[]'
+    needs: detect-charts
+    if: needs.detect-charts.outputs.matrix != '[]'
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        chart: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+        chart: ${{ fromJson(needs.detect-charts.outputs.matrix) }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Helm
+      - name: Install Helm
         uses: azure/setup-helm@v4
 
       - name: Auto bump version (patch)
+        id: bump
         run: |
-          CHART_PATH="charts/${{ matrix.chart }}/Chart.yaml"
-          CURRENT=$(yq '.version' "$CHART_PATH")
+          CHART="charts/${{ matrix.chart }}/Chart.yaml"
+          CURRENT=$(yq '.version' "$CHART")
           NEW=$(echo "$CURRENT" | awk -F. '{$NF = $NF + 1; OFS="."; print}')
-          echo "Bumping $CURRENT → $NEW for ${{ matrix.chart }}"
-          yq -i ".version = \"$NEW\"" "$CHART_PATH"
+          yq -i ".version = \"$NEW\"" "$CHART"
+          echo "new_version=$NEW" >> $GITHUB_OUTPUT
 
-      - name: Log in to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
-            --username "${{ github.actor }}" \
-            --password-stdin
-
-      - name: Publish Helm Chart
+      - name: Push Helm Chart (OCI GHCR)
         uses: appany/helm-oci-chart-releaser@v0.5.0
         with:
           name: ${{ matrix.chart }}
-          path: charts/${{ matrix.chart }}
           repository: ${{ github.repository_owner }}
+          tag: ${{ steps.bump.outputs.new_version }}
+          path: charts/${{ matrix.chart }}
           registry: ghcr.io
-          token: ${{ secrets.GITHUB_TOKEN }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          update_dependencies: 'true'
