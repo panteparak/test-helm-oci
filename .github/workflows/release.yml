@@ -1,83 +1,124 @@
-name: Helm Publish
+name: Publish Helm Charts (OCI GHCR)
 
 on:
   push:
     branches:
-      - 'main'
+      - main
+    paths:
+      - "charts/**"
+
   workflow_dispatch:
+    inputs:
+      charts:
+        description: "Comma-separated list of charts to release (e.g. api,frontend)"
+        required: false
+        default: ""
+
+permissions:
+  packages: write
+  contents: write
 
 jobs:
-  publish-chart:
-    permissions:
-      contents: write     # ⬅ needed for committing version bump
-      packages: write
+  detect-changes:
+    name: Determine Chart List
     runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # important for committing back
+          fetch-depth: 0
 
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.19.2
-
-      - name: Build and Push the Helm Charts to GitHub Container Registry
-        uses: JimCronqvist/action-helm-chart-repo@master
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          chartsPath: ./charts/
-
-      # ---------------------------------------------------------
-      #  Bump Chart Version (patch)
-      # ---------------------------------------------------------
-      - name: Detect and bump changed Helm chart versions
+      # For manual dispatch → Use user input
+      - name: Use workflow_dispatch charts if provided
+        id: dispatch-input
         run: |
-          # find all charts (one folder deep)
-          CHARTS=$(find charts -mindepth 1 -maxdepth 1 -type d)
-
-          BUMPED=""
-
-          for CHART in $CHARTS; do
-            CHART_FILE="$CHART/Chart.yaml"
-
-            # skip if Chart.yaml does not exist
-            [[ ! -f "$CHART_FILE" ]] && continue
-            
-            # detect whether this chart has changed in this commit
-            if ! git diff --name-only HEAD~1 HEAD | grep -q "^$CHART/"; then
-              echo "Chart unchanged: $CHART → skipping bump"
-              continue
-            fi
-
-            echo "Chart changed: $CHART → bumping"
-
-            CURRENT_VERSION=$(grep '^version:' "$CHART_FILE" | awk '{print $2}')
-
-            MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-            MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-            PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
-
-            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-
-            sed -i "s/^version:.*/version: $NEW_VERSION/" "$CHART_FILE"
-
-            BUMPED="$BUMPED $(basename $CHART)→$NEW_VERSION"
-          done
-
-          if [[ -z "$BUMPED" ]]; then
-            echo "No charts changed. Skipping commit."
-            echo "SKIP_COMMIT=true" >> $GITHUB_ENV
-            exit 0
+          if [ "${{ github.event.inputs.charts }}" != "" ]; then
+            echo "mode=manual" >> $GITHUB_OUTPUT
+            echo "charts=${{ github.event.inputs.charts }}" >> $GITHUB_OUTPUT
+          else
+            echo "mode=auto" >> $GITHUB_OUTPUT
+            echo "charts=" >> $GITHUB_OUTPUT
           fi
 
-          echo "Charts bumped: $BUMPED"
-          echo "COMMIT_MESSAGE=ci: bump Helm chart(s): $BUMPED [skip ci]" >> $GITHUB_ENV
+      # Auto detect changed charts when not manually triggered
+      - name: Detect changed charts (auto)
+        id: auto-detect
+        if: steps.dispatch-input.outputs.mode == 'auto'
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD \
+            | grep '^charts/' \
+            | cut -d/ -f2 \
+            | sort -u || true)
 
-      - name: Commit & Push version bump
-        uses: stefanzweifel/git-auto-commit-action@v5
+          echo "auto=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Merge manual or auto charts into matrix array
+        id: set-matrix
+        run: |
+          arr=()
+
+          if [ "${{ steps.dispatch-input.outputs.mode }}" = "manual" ]; then
+            echo "Using manual chart list..."
+            for c in $(echo "${{ steps.dispatch-input.outputs.charts }}" | tr ',' ' '); do
+              if [ -d "charts/$c" ]; then
+                arr+=("\"$c\"")
+              fi
+            done
+          else
+            echo "Using auto-detected charts..."
+            for c in ${{ steps.auto-detect.outputs.auto }}; do
+              if [ -d "charts/$c" ]; then
+                arr+=("\"$c\"")
+              fi
+            done
+          fi
+
+          MATRIX="[$(IFS=,; echo "${arr[*]}")]"
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+      - name: Print matrix
+        run: echo "${{ steps.set-matrix.outputs.matrix }}"
+
+  publish:
+    name: Publish Charts to GHCR
+    needs: detect-changes
+    if: needs.detect-changes.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        chart: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Auto bump version (patch)
+        run: |
+          CHART_PATH="charts/${{ matrix.chart }}/Chart.yaml"
+          CURRENT=$(yq '.version' "$CHART_PATH")
+          NEW=$(echo "$CURRENT" | awk -F. '{$NF = $NF + 1; OFS="."; print}')
+          echo "Bumping $CURRENT → $NEW for ${{ matrix.chart }}"
+          yq -i ".version = \"$NEW\"" "$CHART_PATH"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Publish Helm Chart
+        uses: appany/helm-oci-chart-releaser@v1.3.0
         with:
-          commit_message: "ci: bump Helm chart version to patch $NEW_VERSION"
-          branch: main
+          name: ${{ matrix.chart }}
+          path: charts/${{ matrix.chart }}
+          repository: ${{ github.repository_owner }}
+          registry: ghcr.io
+          token: ${{ secrets.GITHUB_TOKEN }}
