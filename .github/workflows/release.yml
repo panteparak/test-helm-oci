@@ -95,9 +95,18 @@ jobs:
         id: bump
         run: |
           CHART="charts/${{ matrix.chart }}/Chart.yaml"
-          CURRENT=$(yq '.version' "$CHART")
-          NEW=$(echo "$CURRENT" | awk -F. '{$NF = $NF + 1; OFS="."; print}')
+
+          # Extract clean version: remove quotes & trim whitespace
+          CURRENT=$(yq -r '.version' "$CHART" | tr -d '"' | xargs)
+
+          # Bump patch
+          NEW=$(echo "$CURRENT" | awk -F. '{ $NF = $NF + 1; OFS = "."; print }')
+
+          echo "Bumping version $CURRENT → $NEW"
+
+          # Write clean version back
           yq -i ".version = \"$NEW\"" "$CHART"
+
           echo "new_version=$NEW" >> $GITHUB_OUTPUT
 
       - name: Push Helm Chart (OCI GHCR)
